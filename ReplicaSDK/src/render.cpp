@@ -2,10 +2,16 @@
 #include <EGL.h>
 #include <PTexLib.h>
 #include <pangolin/image/image_convert.h>
+#include <pangolin/pangolin.h>
 
 #include "GLCheck.h"
 #include "MirrorRenderer.h"
 
+#include <fstream>
+#include <iomanip>
+#include <cmath>
+
+const double kPi = 3.14159265358979323846;
 
 int main(int argc, char* argv[]) {
   ASSERT(argc == 3 || argc == 4, "Usage: ./ReplicaRenderer mesh.ply /path/to/atlases [mirrorFile]");
@@ -21,8 +27,8 @@ int main(int argc, char* argv[]) {
     ASSERT(pangolin::FileExists(surfaceFile));
   }
 
-  const int width = 1280;
-  const int height = 960;
+  const int width = 1440;
+  const int height = 1600;
   bool renderDepth = true;
   float depthScale = 65535.0f * 0.1f;
 
@@ -58,15 +64,7 @@ int main(int argc, char* argv[]) {
           (height - 1.0f) / 2.0f,
           0.1f,
           100.0f),
-      pangolin::ModelViewLookAtRDF(0, 0, 4, 0, 0, 0, 0, 1, 0));
-
-  // Start at some origin
-  Eigen::Matrix4d T_camera_world = s_cam.GetModelViewMatrix();
-
-  // And move to the left
-  Eigen::Matrix4d T_new_old = Eigen::Matrix4d::Identity();
-
-  T_new_old.topRightCorner(3, 1) = Eigen::Vector3d(0.025, 0, 0);
+  pangolin::ModelViewLookAtRDF(0, 1.5, 4, 0, 1.5, 3, 0, 1, 0));
 
   // load mirrors
   std::vector<MirrorSurface> mirrors;
@@ -91,11 +89,92 @@ int main(int argc, char* argv[]) {
   pangolin::ManagedImage<float> depthImage(width, height);
   pangolin::ManagedImage<uint16_t> depthImageInt(width, height);
 
+  pangolin::Var<float> exposure("ui.Exposure", 0.01, 0.0f, 0.1f);
+  ptexMesh.SetExposure(exposure);
+
   // Render some frames
-  const size_t numFrames = 100;
+  const size_t numFrames = 450;
+  // open trajectory file
+  std::ofstream trajFile("trajectory.txt");
+  trajFile << std::setprecision(8) << std::fixed;
   for (size_t i = 0; i < numFrames; i++) {
     std::cout << "\rRendering frame " << i + 1 << "/" << numFrames << "... ";
     std::cout.flush();
+
+    // --- NEW: "walking and looking around" camera motion  for apartment 0---
+    // double t = static_cast<double>(i) / std::max<size_t>(numFrames - 1, 1);
+
+    // // Walk forward along -Z, with slight side-to-side and bobbing in Y.
+    // double pathLen     = 3.0;          // meters
+    // double baseHeight  = 1.5;          // eye height
+    // double bobAmp      = 0.05;         // head bob amplitude
+    // double strafeAmp   = 0.2;          // left-right sway
+    // double yawAmpDeg   = 20.0;         // +/- 20 degrees yaw
+
+    // double x = strafeAmp * std::sin(2.0 * kPi * t);
+    // double y = baseHeight + bobAmp * std::sin(4.0 * kPi * t);
+    // double z = 4.0 - pathLen * t;      // start at z=4, walk toward z=1
+
+    // double yawRad = (yawAmpDeg * kPi / 180.0) * std::sin(2.0 * kPi * t);
+
+    // // Forward vector from yaw (in RDF coords)
+    // Eigen::Vector3d cam_pos(x, y, z);
+    // Eigen::Vector3d forward(std::sin(yawRad), 0.0, -std::cos(yawRad));
+    // Eigen::Vector3d look_at = cam_pos + forward;
+
+    // Eigen::Matrix4d T_view = pangolin::ModelViewLookAtRDF(
+    //     cam_pos.x(), cam_pos.y(), cam_pos.z(),
+    //     look_at.x(), look_at.y(), look_at.z(),
+    //     0.0, 1.0, 0.0);
+
+    // s_cam.SetModelViewMatrix(T_view);
+    // --- END NEW MOTION ---
+
+    // --- Circular Motion ---
+    double t = static_cast<double>(i) / std::max<size_t>(numFrames - 1, 1);
+
+    // Parameters
+    double radius      = 1.0;    // meter radius of the walking circle
+    double baseHeight  = 0.3;    // eye height (z)
+    double bobAmp      = 0.1;   // vertical head bob amplitude (m)
+    double yawOscDeg   = 50.0;   // extra yaw "look around" amplitude
+
+    // Walk in a circle in the x–y plane (z-up world)
+    double angle = 2.0 * kPi * t;  // one full loop over numFrames
+
+    double x = radius * std::cos(angle);
+    double y = radius * std::sin(angle) + t - 1.0;
+    double z = baseHeight + bobAmp * std::sin(4.0 * kPi * t);  // head bob
+
+    // Base yaw: face roughly along the walking direction (tangent to circle)
+    double baseYaw = angle + kPi / 2.0;  // tangent to circle
+
+    // Add a small "look around" oscillation
+    double yawOscRad = (yawOscDeg * kPi / 180.0) * std::sin(2.0 * kPi * t);
+    double yaw = baseYaw + yawOscRad;
+
+    // Forward direction in x–y plane (horizontal look)
+    Eigen::Vector3d cam_pos(x, y, z);
+    Eigen::Vector3d forward(std::cos(yaw), std::sin(yaw), 0.0);
+    Eigen::Vector3d look_at = cam_pos + forward;
+
+    // z-up world: up vector is (0, 0, 1)
+    Eigen::Matrix4d T_view = pangolin::ModelViewLookAtRDF(
+        cam_pos.x(),  cam_pos.y(),  cam_pos.z(),
+        look_at.x(),  look_at.y(),  look_at.z(),
+        0.0,          0.0,          1.0);
+
+    s_cam.SetModelViewMatrix(T_view);
+    // --- End Motion for office 0 ---
+
+    // --- log pose for this frame (view matrix: world -> camera) ---
+    trajFile << i;
+    for (int r = 0; r < 4; ++r) {
+      for (int c = 0; c < 4; ++c) {
+        trajFile << " " << T_view(r, c);
+      }
+    }
+    trajFile << "\n";
 
     // Render
     frameBuffer.Bind();
@@ -132,7 +211,7 @@ int main(int argc, char* argv[]) {
     render.Download(image.ptr, GL_RGB, GL_UNSIGNED_BYTE);
 
     char filename[1000];
-    snprintf(filename, 1000, "frame%06zu.jpg", i);
+    snprintf(filename, 1000, "frame%06zu.png", i);
 
     pangolin::SaveImage(
         image.UnsafeReinterpret<uint8_t>(),
@@ -167,13 +246,11 @@ int main(int argc, char* argv[]) {
           pangolin::PixelFormatFromString("GRAY16LE"),
           std::string(filename), true, 34.0f);
     }
-
-    // Move the camera
-    T_camera_world = T_camera_world * T_new_old.inverse();
-
-    s_cam.GetModelViewMatrix() = T_camera_world;
   }
   std::cout << "\rRendering frame " << numFrames << "/" << numFrames << "... done" << std::endl;
+
+  // close trajectory file
+  trajFile.close();
 
   return 0;
 }

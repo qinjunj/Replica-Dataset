@@ -234,7 +234,7 @@ void EGLCtx::PrintInformation() {
       reinterpret_cast<PFNEGLQUERYDEVICESTRINGEXTPROC>(
           eglGetProcAddress("eglQueryDeviceStringEXT"));
 
-  for (int i = 0; i < num_devices; ++i) {
+  for (int i = 0; i < 1; ++i) {
     std::cout << "Device " << i << ":" << std::endl;
     EGLDeviceEXT device = devices[i];
     const char* devExts = eglQueryDeviceStringEXT(device, EGL_EXTENSIONS);
